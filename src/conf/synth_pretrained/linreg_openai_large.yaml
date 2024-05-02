@@ -13,7 +13,7 @@ training:
 out_dir: ../models/linear_regression
 
 model:
-    name: openai-community/gpt2
+    name: openai-community/gpt2-large
     preconfig: true
     n_embd: 1280
 
