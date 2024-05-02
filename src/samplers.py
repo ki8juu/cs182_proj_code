@@ -12,8 +12,11 @@ class DataSampler:
 
 
 def get_data_sampler(data_name, n_dims, **kwargs):
+    # This is hardcoded
+    # TODO(emma apr 24) change this maybe to support LanguageSampler
     names_to_classes = {
         "gaussian": GaussianSampler,
+        "language": LanguageSampler
     }
     if data_name in names_to_classes:
         sampler_cls = names_to_classes[data_name]
@@ -56,3 +59,22 @@ class GaussianSampler(DataSampler):
         if n_dims_truncated is not None:
             xs_b[:, :, n_dims_truncated:] = 0
         return xs_b
+
+class LanguageSampler(DataSampler): 
+    # TODO(emma apr 24) where is init called -- called in get_data_sampler
+    # we can pass in more args into the kwargs section
+    # n_dims should be 1, since our array will just contain one string.
+    # potentially change this by looking at the input and output to the tokenizer.
+    def __init__(self, n_dims=1, dataset_name="imdb"):
+        super().__init__(n_dims)
+        self.dataset_name = dataset_name
+    
+    def sample_xs(self, n_points, b_size, n_dims_truncated=None, seeds=None):
+        '''
+        Return a tensor of strings -- each string is a sentence
+        '''
+
+        xs_b = [] 
+        
+
+        return torch.randn(b_size, n_points, self.n_dims)

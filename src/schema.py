@@ -26,6 +26,8 @@ model_schema = {
     "n_layer": merge(tinteger, required),
     "n_head": merge(tinteger, required),
     "from_scratch": merge(tboolean, required),
+    "language_finetune": merge(tboolean, default(False)),
+    "synth_ckpt": merge(tstring)
 }
 
 curriculum_base_schema = {
@@ -64,6 +66,7 @@ training_schema = {
     "keep_every_steps": merge(tinteger, default(-1)),  # permanent checkpoints
     "resume_id": merge(tstring, nullable, default(None)),  # run uuid64
     "curriculum": stdict(curriculum_schema),
+    "dataset_name": merge(tstring, default("imdb"))
 }
 
 wandb_schema = {

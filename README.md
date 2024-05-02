@@ -20,6 +20,9 @@ This notebook also contains code to train a toy transformer with randomized labe
 - `train.py` takes as argument a configuration yaml from `conf` and trains the corresponding model. You can try `python train.py --config conf/seq_linear.yaml` for a quick training run for our recursive linear function.
 To train on a sliding window sequential task, you can run `python train.py --config conf/seq_relu_2nn.yaml`
 
+IN PROGRESS NOTES 
+`pip install datasets` for training language
+
 
 Most of the code in our codebase comes from
 **What Can Transformers Learn In-Context? A Case Study of Simple Function Classes** <br>

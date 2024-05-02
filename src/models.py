@@ -7,6 +7,7 @@ from sklearn.linear_model import LogisticRegression, Lasso
 import warnings
 from sklearn import tree
 import xgboost as xgb
+import os
 
 from base_models import NeuralNetwork, ParallelNetworks
 
@@ -14,8 +15,13 @@ from base_models import NeuralNetwork, ParallelNetworks
 def build_model(conf, seq):
     if conf.family == "gpt2":
         if "garg" not in conf.name:
-            print("Building a model from pre-trained GPT2 language model")
-            model = FromLanguageTransformerModel(conf.n_dims, family=conf.family, checkpoint=conf.name, n_embd=conf.n_embd, mlp=conf.mlp, freeze_ln=conf.freeze_ln, seq=seq)
+            if not conf.language_finetune:
+                print("Building a model from pre-trained GPT2 language model")
+                model = FromLanguageTransformerModel(conf.n_dims, family=conf.family, checkpoint=conf.name, n_embd=conf.n_embd, mlp=conf.mlp, freeze_ln=conf.freeze_ln, seq=seq)
+            else:
+                print("Building language model from a pre-trained GPT2 synthetic model")  
+                model = FromSyntheticTransformerModel(conf.n_dims, conf.synth_ckpt, conf.name, conf.n_positions, family=conf.family,  n_embd=conf.n_embd, freeze_ln=conf.freeze_ln, seq=seq)
+
         else:
             model = TransformerModel(
                 n_dims=conf.n_dims,
@@ -231,7 +237,7 @@ class FromLanguageTransformerModel(nn.Module):
         return prediction[:, ::2, :][:, inds]  # predict only on xs
     
 class FromSyntheticTransformerModel(nn.Module):
-    def __init__(self, n_dims, checkpoint, n_positions, n_embd=128, n_layer=12, n_head=4, family="gpt2", freeze_ln=False, seq=False):
+    def __init__(self, n_dims, synth_ckpt_dir, pretrained_language_ckpt, n_positions, n_embd=128, n_layer=12, n_head=4, family="gpt2", freeze_ln=False, seq=False):
         super(FromSyntheticTransformerModel, self).__init__()
 
         self.name = family
@@ -240,23 +246,48 @@ class FromSyntheticTransformerModel(nn.Module):
 
         # TODO(emma): set name 
 
-        self.n_positions = n_positions
-        self.n_dims = n_dims
-        self._read_in = nn.Linear(n_dims, n_embd)
+        # self.n_positions = n_positions
+        # self.n_dims = n_dims
+        # self._read_in = nn.Linear(n_dims, n_embd)
 
-        self._backbone = GPT2Model.from_pretrained(checkpoint)
+        # checkpoint should be the model trained on synthetic data, remember, it has the liear layer/MLP, which we do not want.
+        
+        # take just the pretrained transformer backbone
+        # take pretrained embedder -- might have some issues with the embedder resize
+
+        # finetune just the layer norms and the output unembedding? maybe? not sure how large that is
+        
+        synthetic_model = TransformerModel(n_dims, n_positions, n_embd, n_layer, n_head, seq)
+        # load synthetic model
+        state_path = os.path.join(synth_ckpt_dir, "state.pt")
+        if os.path.exists(state_path):
+            state = torch.load(state_path)
+            synthetic_model.load_state_dict(state["model_state_dict"])
+        else: 
+            # TODO: change this error
+            raise ValueError('Model path does not exist')
+
+
+        self._backbone = synthetic_model._backbone
+
+        pretrained_lang_model = GPT2Model.from_pretrained(pretrained_language_ckpt)
+
+        self._backbone.transformer.wte = pretrained_lang_model.transformer.wte
+
 
         if freeze_ln:
             # freeze all the parameters of the GPT2 backbone 
-            for param in self._backbone.parameters():
-                param.requires_grad = False
+            for name, param in self._backbone.named_parameters():
+                # TODO: do we also unfreeze 
+                if 'wpe' not in name:
+                    param.requires_grad = False
         else: 
             for name, param in self._backbone.named_parameters():
-                if 'layer_norm' not in name:
+                if 'layer_norm' not in name and 'wpe' not in name:
                     param.requires_grad = False
-    def forward(self, xs, ys, inds=None):
-        # TODO(emma) implement forward
-        return 
+    def forward(self, xs):
+        outputs = self._backbone(xs)
+        return outputs[0]
 
 
 

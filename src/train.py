@@ -22,12 +22,9 @@ print_debug_steps = 50
 def train_step(model, xs, ys, optimizer, loss_func, step):
     optimizer.zero_grad()
     output = model(xs, ys)
-    # print(torch.max(xs))
-    # if step % print_debug_steps == 0:
-    #  print("output: ", output[0])
+
     loss = loss_func(output, ys)
-    # if loss > 1.5:
-    #   print("LOSS WAS CRAZY: output: ", output[0])
+
     loss.backward()
     optimizer.step()
     return loss.detach().item(), output.detach()

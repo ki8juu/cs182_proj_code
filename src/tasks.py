@@ -5,6 +5,9 @@ import torch
 
 import itertools
 
+# language imports 
+from datasets import load_dataset
+
 
 def squared_error(ys_pred, ys):
     ys_pred = ys_pred.squeeze()
@@ -582,4 +585,41 @@ def get_seq_task_sampler(
     else:
         print("Unknown task")
         raise NotImplementedError
+
+class LanguageClassification(Task):
+    def __init__(self, n_dims, batch_size, pool_dict=None, seeds=None, scale=1):
+        """scale: a constant by which to scale the randomly sampled weights."""
+        super(LanguageClassification, self).__init__(n_dims, batch_size, pool_dict, seeds)
+        self.scale = scale
+
+        # load dataset, we should have some map that maps input to output
+        dataset = load_dataset("imdb")
+
+        self.w_b = {}
+
+        for data in dataset: 
+            self.w_b[data['text']] = data['label']
+        
+        # get a list of xs, randomize numbers in an array
+
+    # evaluate is used to get the example ("correct") labels
+    def evaluate(self, xs_b):
+        # take in an array of xs 
+        # get ys for each xs
+
+        w_b = self.w_b.to(xs_b.device)
+        ys_b = self.scale * (xs_b @ w_b)[:, :, 0]
+        return ys_b
+
+    @staticmethod
+    def generate_pool_dict(n_dims, num_tasks, **kwargs):  # ignore extra args
+        return {"w": torch.randn(num_tasks, n_dims, 1)}
+
+    @staticmethod
+    def get_metric():
+        return squared_error
+
+    @staticmethod
+    def get_training_metric():
+        return mean_squared_error
     
