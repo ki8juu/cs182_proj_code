@@ -16,8 +16,12 @@ from base_models import NeuralNetwork, ParallelNetworks
 def build_model(conf, seq):
     if conf.family == "gpt2":
         if "garg" not in conf.name:
-            print("Building a model from pre-trained GPT2 language model")
-            model = FromLanguageTransformerModel(conf.n_dims, family=conf.family, checkpoint=conf.name, n_embd=conf.n_embd, mlp=conf.mlp, freeze_ln=conf.freeze_ln, pca=conf.pca, seq=seq)
+            if not conf.preconfig:
+                print("Building a model from pre-trained GPT2 language model")
+                model = FromLanguageTransformerModel(conf.n_dims, family=conf.family, checkpoint=conf.name, n_embd=conf.n_embd, mlp=conf.mlp, freeze_ln=conf.freeze_ln, pca=conf.pca, seq=seq)
+            else:
+                print("Building a synthetic model from scratch")
+                model = TransformerModel(conf.n_dims, conf.n_positions, preconfigured=conf.name, n_embd=conf.n_embd)
         else:
             model = TransformerModel(
                 n_dims=conf.n_dims,
@@ -92,18 +96,21 @@ def get_relevant_baselines(task_name):
 
 SEQ = True
 class TransformerModel(nn.Module):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, seq=False):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, seq=False, preconfigured=""):
         super(TransformerModel, self).__init__()
-        configuration = GPT2Config(
-            n_positions=2 * n_positions,
-            n_embd=n_embd,
-            n_layer=n_layer,
-            n_head=n_head,
-            resid_pdrop=0.0,
-            embd_pdrop=0.0,
-            attn_pdrop=0.0,
-            use_cache=False,
-        )
+        if preconfigured != "":
+            configuration = GPT2Config.from_pretrained(preconfigured)
+        else:
+            configuration = GPT2Config(
+                n_positions=2 * n_positions,
+                n_embd=n_embd,
+                n_layer=n_layer,
+                n_head=n_head,
+                resid_pdrop=0.0,
+                embd_pdrop=0.0,
+                attn_pdrop=0.0,
+                use_cache=False,
+            )
         self.name = f"gpt2_embd={n_embd}_layer={n_layer}_head={n_head}"
 
         self.n_positions = n_positions
