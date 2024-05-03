@@ -21,7 +21,7 @@ def build_model(conf, seq):
                 model = FromLanguageTransformerModel(conf.n_dims, family=conf.family, checkpoint=conf.name, n_embd=conf.n_embd, mlp=conf.mlp, freeze_ln=conf.freeze_ln, pca=conf.pca, seq=seq)
             else:
                 print("Building a synthetic model from scratch")
-                model = TransformerModel(conf.n_dims, conf.n_positions, preconfigured=conf.name, n_embd=conf.n_embd)
+                model = TransformerModel(conf.n_dims, conf.n_positions, preconfigured=conf.name, n_embd=conf.n_embd, seq=seq)
         else:
             model = TransformerModel(
                 n_dims=conf.n_dims,
@@ -127,6 +127,7 @@ class TransformerModel(nn.Module):
     def _combine(xs_b, ys_b, seq):
         """Interleaves the x's and the y's into a single sequence."""
         bsize, points, dim = xs_b.shape
+        print("is seq", seq)
         if not seq:
             ys_b = torch.cat(
                 (

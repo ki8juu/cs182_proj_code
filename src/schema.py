@@ -26,7 +26,6 @@ model_schema = {
     "n_embd": merge(tinteger, required),
     "n_layer": merge(tinteger, required),
     "n_head": merge(tinteger, required),
-    "from_scratch": merge(tboolean, required),
     "preconfig": merge(tboolean, default(False))
 }
 

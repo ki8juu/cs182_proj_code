@@ -15,7 +15,6 @@ model:
     mlp: false
     freeze_ln: true
     n_embd: 768
-    from_scratch: false
 
 out_dir: ../models/linear_regression/lang_pretrained/gpt2-small
 
