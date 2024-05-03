@@ -9,6 +9,8 @@ from sklearn import tree
 import xgboost as xgb
 import os
 
+import numpy as np
+
 from base_models import NeuralNetwork, ParallelNetworks
 
 
@@ -16,12 +18,15 @@ def build_model(conf, seq):
     if conf.family == "gpt2":
         if "garg" not in conf.name:
             if not conf.language_finetune:
-                print("Building a model from pre-trained GPT2 language model")
-                model = FromLanguageTransformerModel(conf.n_dims, family=conf.family, checkpoint=conf.name, n_embd=conf.n_embd, mlp=conf.mlp, freeze_ln=conf.freeze_ln, seq=seq)
+                if not conf.preconfig:
+                    print("Building a model from pre-trained GPT2 language model")
+                    model = FromLanguageTransformerModel(conf.n_dims, family=conf.family, checkpoint=conf.name, n_embd=conf.n_embd, mlp=conf.mlp, freeze_ln=conf.freeze_ln, pca=conf.pca, seq=seq)
+                else:
+                    print("Building a synthetic model from scratch")
+                    model = TransformerModel(conf.n_dims, conf.n_positions, preconfigured=conf.name, n_embd=conf.n_embd, seq=seq)
             else:
                 print("Building language model from a pre-trained GPT2 synthetic model")  
                 model = FromSyntheticTransformerModel(conf.n_dims, conf.synth_ckpt, conf.name, conf.n_positions, family=conf.family,  n_embd=conf.n_embd, freeze_ln=conf.freeze_ln, seq=seq)
-
         else:
             model = TransformerModel(
                 n_dims=conf.n_dims,
@@ -96,18 +101,21 @@ def get_relevant_baselines(task_name):
 
 SEQ = True
 class TransformerModel(nn.Module):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, seq=False):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, seq=False, preconfigured=""):
         super(TransformerModel, self).__init__()
-        configuration = GPT2Config(
-            n_positions=2 * n_positions,
-            n_embd=n_embd,
-            n_layer=n_layer,
-            n_head=n_head,
-            resid_pdrop=0.0,
-            embd_pdrop=0.0,
-            attn_pdrop=0.0,
-            use_cache=False,
-        )
+        if preconfigured != "":
+            configuration = GPT2Config.from_pretrained(preconfigured)
+        else:
+            configuration = GPT2Config(
+                n_positions=2 * n_positions,
+                n_embd=n_embd,
+                n_layer=n_layer,
+                n_head=n_head,
+                resid_pdrop=0.0,
+                embd_pdrop=0.0,
+                attn_pdrop=0.0,
+                use_cache=False,
+            )
         self.name = f"gpt2_embd={n_embd}_layer={n_layer}_head={n_head}"
 
         self.n_positions = n_positions
@@ -124,6 +132,7 @@ class TransformerModel(nn.Module):
     def _combine(xs_b, ys_b, seq):
         """Interleaves the x's and the y's into a single sequence."""
         bsize, points, dim = xs_b.shape
+        print("is seq", seq)
         if not seq:
             ys_b = torch.cat(
                 (
@@ -158,7 +167,7 @@ class TransformerModel(nn.Module):
         return prediction[:, ::2, :][:, inds]  # predict only on xs
 
 class FromLanguageTransformerModel(nn.Module):
-    def __init__(self, n_dims, family="gpt2", checkpoint="openai-community/gpt2", n_embd=128, mlp=False, freeze_ln=False, seq=False):
+    def __init__(self, n_dims, family="gpt2", checkpoint="openai-community/gpt2", n_embd=128, mlp=False, freeze_ln=False, pca=False, seq=False):
         super(FromLanguageTransformerModel, self).__init__()
 
         # there is no need for a GPT2 configuration if you use a pretrained model.
@@ -177,6 +186,10 @@ class FromLanguageTransformerModel(nn.Module):
         else:
             self._read_in = nn.Linear(n_dims, n_embd)
 
+        self.pca = pca
+        if self.pca:
+            self.pca_projection = nn.Parameter(torch.from_numpy(np.load("/home/williamz/in-context-learning/pca.npy")), requires_grad=False)
+            print(self.pca_projection.shape)
         if family == "gpt2":
             self._backbone = GPT2Model.from_pretrained(checkpoint)
         # elif family == "Llama-2":
@@ -232,6 +245,9 @@ class FromLanguageTransformerModel(nn.Module):
         zs = self._combine(xs, ys, self.seq)
         # print(zs)
         embeds = self._read_in(zs)
+        ## do pca
+        if self.pca:
+            embeds = embeds @ self.pca_projection.T
         output = self._backbone(inputs_embeds=embeds).last_hidden_state
         prediction = self._read_out(output)
         return prediction[:, ::2, :][:, inds]  # predict only on xs

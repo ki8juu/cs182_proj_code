@@ -20,6 +20,7 @@ model_schema = {
     # "family": merge(tstring),
     "freeze_ln": merge(tboolean, default(True)),
     "mlp": merge(tboolean, default(False)),
+    "pca": merge(tboolean, default(False)),
     "n_positions": merge(tinteger, required),  # maximum context length
     "n_dims": merge(tinteger, required),  # latent dimension
     "n_embd": merge(tinteger, required),
@@ -27,7 +28,8 @@ model_schema = {
     "n_head": merge(tinteger, required),
     "from_scratch": merge(tboolean, required),
     "language_finetune": merge(tboolean, default(False)),
-    "synth_ckpt": merge(tstring)
+    "synth_ckpt": merge(tstring),
+    "preconfig": merge(tboolean, default(False))
 }
 
 curriculum_base_schema = {
