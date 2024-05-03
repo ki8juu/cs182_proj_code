@@ -5,7 +5,7 @@ inherit:
 model:
     n_dims: 100
     n_positions: 100
-    name: openai-community/gpt2
+    name: openai-community/gpt2-med
     preconfig: true
     n_embd: 1024
 
