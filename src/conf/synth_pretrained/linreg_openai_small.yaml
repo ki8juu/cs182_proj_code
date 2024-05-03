@@ -3,6 +3,14 @@ inherit:
 
 training:
     task: linear_regression
+    dataset_name: "imdb"
+    # curriculum is not actually used for the language finetuning
+    curriculum:
+        points:
+            start: 11
+            end: 41
+            inc: 2
+            interval: 2000
 
 out_dir: ../models/linear_regression/synth_pretrained/gpt2-small
 
@@ -10,6 +18,9 @@ model:
     name: openai-community/gpt2
     preconfig: true
     n_embd: 768
+    language_finetune: true
+    # this is a dummy one right now
+    synth_ckpt: "../models/linear_regression/dcedb1e3-0af2-4a25-b29a-41be558183ee"
 
 wandb:
     name: "linear_regression_from_synth_gpt2small"

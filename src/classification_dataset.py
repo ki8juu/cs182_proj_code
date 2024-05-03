@@ -31,23 +31,26 @@ class MovieReviewsDataset(Dataset):
 
     # TODO: this is hardcoded, eventually, don't do this!
     self.dataset = load_dataset('imdb')
-    random.shuffle(self.dataset)
+
+    # TODO: for now, lets just use train
+    self.dataset['train'] = self.dataset['train'].shuffle(seed=42)
+    self.dataset['test'] = self.dataset['test'].shuffle(seed=42)
 
     # randomly shuffle and sample from the dataset
 
     self.texts = []
     self.labels = []
 
-    max_examples = len(self.dataset) // 11
+    max_examples = len(self.dataset['train']) // 11
 
     i = 0
     while i < max_examples:
         context = []
         for j in range(10):
-            context.append("\n".join([self.dataset[i + j]['text'], self.dataset[i + j]['label']]))
-        context.append(self.dataset[i + 10]['text'])
+            context.append("\n".join([self.dataset['train'][i + j]['text'], 'pos' if self.dataset['train'][i + j]['label'] else 'neg']))
+        context.append(self.dataset['train'][i + 10]['text'])
         self.texts.append("\n\n".join(context))
-        self.labels.append(self.dataset[i + 10]['label'])
+        self.labels.append('pos' if self.dataset['train'][i + j]['label'] else 'neg')
         i += 1
 
     # Number of exmaples.
@@ -77,11 +80,8 @@ class MovieReviewsDataset(Dataset):
       asociated labels.
 
     """
-
-    print("what the item looks like")
-    print(self.texts[item])
-    print(self.labels[item])
-
+    # print("what the item looks like")
+    # print(self.texts[item])
     return {'text':self.texts[item],
             'label':self.labels[item]}
 

@@ -275,20 +275,24 @@ class FromSyntheticTransformerModel(nn.Module):
         
         synthetic_model = TransformerModel(n_dims, n_positions, n_embd, n_layer, n_head, seq)
         # load synthetic model
-        state_path = os.path.join(synth_ckpt_dir, "state.pt")
-        if os.path.exists(state_path):
-            state = torch.load(state_path)
-            synthetic_model.load_state_dict(state["model_state_dict"])
-        else: 
-            # TODO: change this error
-            raise ValueError('Model path does not exist')
+        # TODO: erroring for now because we don't have a properly trained synthetic model
+        # state_path = os.path.join(synth_ckpt_dir, "state.pt")
+        # print("where the synthetic_model is", state_path)
+        # if os.path.exists(state_path):
+        #     state = torch.load(state_path)
+        #     synthetic_model.load_state_dict(state["model_state_dict"])
+        # else: 
+        #     # TODO: change this error
+        #     raise ValueError('Model path does not exist')
 
 
         self._backbone = synthetic_model._backbone
 
         pretrained_lang_model = GPT2Model.from_pretrained(pretrained_language_ckpt)
 
-        self._backbone.transformer.wte = pretrained_lang_model.transformer.wte
+        self._backbone.wte = pretrained_lang_model.wte
+
+        self.classifier = torch.nn.Linear(n_embd, 2)
 
 
         if freeze_ln:
@@ -301,9 +305,11 @@ class FromSyntheticTransformerModel(nn.Module):
             for name, param in self._backbone.named_parameters():
                 if 'layer_norm' not in name and 'wpe' not in name:
                     param.requires_grad = False
-    def forward(self, xs):
-        outputs = self._backbone(xs)
-        return outputs[0]
+    def forward(self, **args):
+        outputs = self._backbone(**args)
+        hidden_states = outputs[0]
+        logits = self.classifier(hidden_states)
+        return logits
 
 
 

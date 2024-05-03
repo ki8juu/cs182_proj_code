@@ -107,7 +107,9 @@ def validation(model, dataloader, device):
         # calculate the average loss at the end. `loss` is a Tensor containing a
         # single value; the `.item()` function just returns the Python value 
         # from the tensor.
-        total_loss += loss.item()
+
+        # TODO: fix this, it's not a scalar for some reason, error
+        # total_loss += loss.item()
         
         # get predicitons to list
         predict_content = logits.argmax(axis=-1).flatten().tolist()
@@ -130,18 +132,29 @@ def train_step(model, dataloader, optimizer, scheduler, device):
     predictions_labels = []
     true_labels = []
 
+    total_loss = 0
+
     for batch in tqdm(dataloader, total=len(dataloader)):
         true_labels += batch['labels'].numpy().flatten().tolist()
 
         batch = {k:v.type(torch.long).to(device) for k,v in batch.items()}
+        batch.pop('labels', None)
+
         # TODO: model.zero_grad or optimizer.zero_grad?
         model.zero_grad()
 
+        print("input batch", batch)
         outputs = model(**batch)
+
+        print("model outputs", outputs)
 
         # TODO: what is the loss function being used for pretrained GPT2
         loss, logits = outputs[:2]
-        total_loss += loss.item()
+
+        print("model loss", loss)
+
+        # TODO: ERROR: not sure why it's not a scalar
+        # total_loss += loss.item()
 
         loss.backward()
 
@@ -412,15 +425,15 @@ def main(args):
     # Define PAD Token = EOS Token = 50256
     tokenizer.pad_token = tokenizer.eos_token
 
-    # TODO: do we need to do this
+    # TODO: do we need to do this -- right now it's erroring
     # resize model embedding to match new tokenizer
     # necessary when the vocab size of the tokenizer changes 
     # esp when you add new tokens to the tokenizer
     # for us this might not do anything
-    model.resize_token_embeddings(len(tokenizer))
+    model._backbone.resize_token_embeddings(len(tokenizer))
 
     # set model padding token id
-    model.config.pad_token_id = model.config.eos_token_id
+    model._backbone.config.pad_token_id = model._backbone.config.eos_token_id
 
     model.to(device)
     model.train()
