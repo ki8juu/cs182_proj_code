@@ -18,7 +18,7 @@ model:
     n_embd: 1280
     from_scratch: false
 
-out_dir: ../models/linear_regression/gpt2-med
+out_dir: ../models/linear_regression/lang_pretrained/gpt2-large
 
 wandb:
     name: "linear_regression_from_language_gpt2large_mlp_ln"

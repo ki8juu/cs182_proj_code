@@ -10,7 +10,7 @@ training:
             inc: 2
             interval: 2000
 
-out_dir: ../models/linear_regression/synth_base/gpt2-medium
+out_dir: ../models/linear_regression/synth_base/gpt2-med
 
 model:
     name: openai-community/gpt2-medium
@@ -18,4 +18,4 @@ model:
     n_embd: 1024
 
 wandb:
-    name: "linear_regression_standard"
+    name: "linear_regression_gpt2med"

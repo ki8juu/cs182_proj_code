@@ -17,4 +17,4 @@ model:
     preconfig: true
     n_embd: 1280
 wandb:
-    name: "linear_regression_standard"
+    name: "linear_regression_gpt2large"

@@ -4,7 +4,7 @@ inherit:
 training:
     task: linear_regression
 
-out_dir: ../models/linear_regression/synth_pretrained/small
+out_dir: ../models/linear_regression/synth_pretrained/gpt2-small
 
 model:
     name: openai-community/gpt2
@@ -12,4 +12,4 @@ model:
     n_embd: 768
 
 wandb:
-    name: "linear_regression_small"
+    name: "linear_regression_from_synth_gpt2small"

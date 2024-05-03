@@ -18,4 +18,4 @@ model:
     n_embd: 768
 
 wandb:
-    name: "linear_regression_standard"
+    name: "linear_regression_gpt2small"
