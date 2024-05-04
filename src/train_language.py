@@ -108,8 +108,7 @@ def validation(model, dataloader, device):
         # single value; the `.item()` function just returns the Python value 
         # from the tensor.
 
-        # TODO: fix this, it's not a scalar for some reason, error
-        # total_loss += loss.item()
+        total_loss += loss.item()
         
         # get predicitons to list
         predict_content = logits.argmax(axis=-1).flatten().tolist()
@@ -143,18 +142,14 @@ def train_step(model, dataloader, optimizer, scheduler, device):
         # TODO: model.zero_grad or optimizer.zero_grad?
         model.zero_grad()
 
-        print("input batch", batch)
         outputs = model(**batch)
-
-        print("model outputs", outputs)
 
         # TODO: what is the loss function being used for pretrained GPT2
         loss, logits = outputs[:2]
 
         print("model loss", loss)
 
-        # TODO: ERROR: not sure why it's not a scalar
-        # total_loss += loss.item()
+        total_loss += loss.item()
 
         loss.backward()
 
@@ -237,8 +232,8 @@ def train(model, args, device, tokenizer):
     train_dataset = MovieReviewsDataset()
     train_dataloader = DataLoader(train_dataset, batch_size=bsize, shuffle=True, collate_fn=gpt2_classification_collator)
 
-    # valid_dataset =  MovieReviewsDataset()
-    # valid_dataloader = DataLoader(valid_dataset, batch_size=bsize, shuffle=False, collate_fn=gpt2_classification_collator)
+    valid_dataset =  MovieReviewsDataset()
+    valid_dataloader = DataLoader(valid_dataset, batch_size=bsize, shuffle=False, collate_fn=gpt2_classification_collator)
 
 
     # EVERYTHING ELSE NEEDED FOR TRAINING
@@ -272,7 +267,7 @@ def train(model, args, device, tokenizer):
     #     num_tasks=args.training.num_tasks,
     #     **args.training.task_kwargs,
     # )
-    
+    print("length of the train_dataloader", len(train_dataloader))
     total_steps = len(train_dataloader) * epochs
 
     # pbar = tqdm(range(starting_step, total_steps))
@@ -293,13 +288,13 @@ def train(model, args, device, tokenizer):
         train_labels, train_predict, train_loss = train_step(model, train_dataloader, optimizer, scheduler, device)
         train_acc = accuracy_score(train_labels, train_predict)
 
-        # valid_labels, valid_predict, val_loss = validation(model, valid_dataloader, device)
-        # val_acc = accuracy_score(valid_labels, valid_predict)
+        valid_labels, valid_predict, val_loss = validation(model, valid_dataloader, device)
+        val_acc = accuracy_score(valid_labels, valid_predict)
 
         all_loss['train_loss'].append(train_loss)
-        # all_loss['val_loss'].append(val_loss)
+        all_loss['val_loss'].append(val_loss)
         all_acc['train_acc'].append(train_acc)
-        # all_acc['val_acc'].append(val_acc)
+        all_acc['val_acc'].append(val_acc)
 
     # TODO: log epoch loss and accuracy in wandb
 
