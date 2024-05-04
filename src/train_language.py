@@ -138,7 +138,7 @@ def train_step(model, dataloader, optimizer, scheduler, device):
         true_labels += batch['labels'].numpy().flatten().tolist()
 
         batch = {k:v.type(torch.long).to(device) for k,v in batch.items()}
-        batch.pop('labels', None)
+        # batch.pop('labels', None)
 
         # TODO: model.zero_grad or optimizer.zero_grad?
         model.zero_grad()

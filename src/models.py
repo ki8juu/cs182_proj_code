@@ -306,10 +306,26 @@ class FromSyntheticTransformerModel(nn.Module):
                 if 'layer_norm' not in name and 'wpe' not in name:
                     param.requires_grad = False
     def forward(self, **args):
-        outputs = self._backbone(**args)
-        hidden_states = outputs[0]
-        logits = self.classifier(hidden_states)
-        return logits
+        # outputs = self._backbone(**args)
+        # hidden_states = outputs[0]
+        # logits = self.classifier(hidden_states)
+        # return logits
+
+        args_without_labels = args.copy()
+        labels = args_without_labels.pop('labels', None)
+
+        outputs = self._backbone(**args_without_labels)
+        last_hidden_state = outputs.last_hidden_state[:, 0, :]  # Get the pooled output
+        logits = self.classifier(last_hidden_state)
+
+        labels = args.get('labels')
+
+        if labels is not None:
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, 2), labels.view(-1))
+            return loss, logits
+        else:
+            return logits
 
 
 
