@@ -23,7 +23,7 @@ model:
     n_embd: 768
     language_finetune: true
     # this is a dummy one right now
-    synth_ckpt: "../models/linear_regression/dcedb1e3-0af2-4a25-b29a-41be558183ee"
+    synth_ckpt: "../models/linear_regression/synth_base/gpt2-small/4479da62-bb18-425e-9a42-500a26e6f50d"
 
 wandb:
     name: "linear_regression_from_synth_gpt2small"
