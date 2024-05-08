@@ -15,11 +15,9 @@ from schema import schema
 from models import build_model
 # TODO: not sure if i need to use AutoTokenizer instead
 from transformers import GPT2Tokenizer, get_linear_schedule_with_warmup
-from classification_dataset import MovieReviewsDataset, Gpt2ClassificationCollator
+from classification_dataset import LanguageDataset, Gpt2ClassificationCollator
 from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report, accuracy_score
-
-
 
 import wandb
 
@@ -124,7 +122,7 @@ def validation(model, dataloader, device):
 
 # TODO: don't do curriculum training yet
 
-def train_step(model, dataloader, optimizer, scheduler, device):
+def train_step(model, dataloader, optimizer, scheduler, device, epoch):
     # Single pass through the dataloader (technically not just one train step lol)
 
     # Tracking variables.
@@ -133,7 +131,7 @@ def train_step(model, dataloader, optimizer, scheduler, device):
 
     total_loss = 0
 
-    for batch in tqdm(dataloader, total=len(dataloader)):
+    for batch_i, batch in enumerate(tqdm(dataloader, total=len(dataloader))):
         true_labels += batch['labels'].numpy().flatten().tolist()
 
         batch = {k:v.type(torch.long).to(device) for k,v in batch.items()}
@@ -166,20 +164,23 @@ def train_step(model, dataloader, optimizer, scheduler, device):
         # Convert these logits to list of predicted labels values.
         predictions_labels += logits.argmax(axis=-1).flatten().tolist()
 
-        # TODO: i'm not sure exactly how many batches it takes to go through dataloader
-        # if i % args.wandb.log_every_steps == 0 and not args.test_run:
-        #     wandb.log(
-        #         {
-        #             "overall_loss": loss,
-        #             # "excess_loss": loss / baseline_loss,
-        #             # "pointwise/loss": dict(
-        #             #     zip(point_wise_tags, point_wise_loss.cpu().numpy())
-        #             # ),
-        #             # "n_points": curriculum.n_points,
-        #             # "n_dims": curriculum.n_dims_truncated,
-        #         },
-        #         step=i,
-        #     )
+        # hardcoded 100, in args.wandb.log_every_steps or something
+        # also no option for test run
+        i = epoch * len(dataloader) + batch_i
+        print(i, "train step")
+        if (i) % 10 == 0:
+            wandb.log(
+                {
+                    "overall_loss": loss,
+                    # "excess_loss": loss / baseline_loss,
+                    # "pointwise/loss": dict(
+                    #     zip(point_wise_tags, point_wise_loss.cpu().numpy())
+                    # ),
+                    # "n_points": curriculum.n_points,
+                    # "n_dims": curriculum.n_dims_truncated,
+                },
+                step=i,
+            )
         # pbar.set_description(f"loss {loss}") ----- not sure what to do here
 
     avg_epoch_loss = total_loss / len(dataloader)
@@ -222,17 +223,17 @@ def train(model, args, device, tokenizer):
     max_length = 60
 
     bsize = args.training.batch_size
-    epochs = 4
+    epochs = 6
 
 
     gpt2_classification_collator = Gpt2ClassificationCollator(use_tokenizer=tokenizer, 
                                                           labels_encoder=labels_ids, 
                                                           max_sequence_len=max_length)
 
-    train_dataset = MovieReviewsDataset()
+    train_dataset = LanguageDataset(args.data.dataset_name, args.data.text_key, args.model.n_positions)
     train_dataloader = DataLoader(train_dataset, batch_size=bsize, shuffle=True, collate_fn=gpt2_classification_collator)
 
-    valid_dataset =  MovieReviewsDataset()
+    valid_dataset =  LanguageDataset(args.data.dataset_name, args.data.text_key, args.model.n_positions)
     valid_dataloader = DataLoader(valid_dataset, batch_size=bsize, shuffle=False, collate_fn=gpt2_classification_collator)
 
 
@@ -285,7 +286,7 @@ def train(model, args, device, tokenizer):
     for epoch in tqdm(range(epochs)):
         # Perform one full pass over the training set.
         # TODO modify the train function
-        train_labels, train_predict, train_loss = train_step(model, train_dataloader, optimizer, scheduler, device)
+        train_labels, train_predict, train_loss = train_step(model, train_dataloader, optimizer, scheduler, device, epoch)
         train_acc = accuracy_score(train_labels, train_predict)
 
         valid_labels, valid_predict, val_loss = validation(model, valid_dataloader, device)
@@ -295,6 +296,12 @@ def train(model, args, device, tokenizer):
         all_loss['val_loss'].append(val_loss)
         all_acc['train_acc'].append(train_acc)
         all_acc['val_acc'].append(val_acc)
+
+        # TODO: not sure if i can do epoch instead of step
+        # wandb.log(
+        #         all_loss,
+        #         step=epoch,
+        #     )
 
     # TODO: log epoch loss and accuracy in wandb
 

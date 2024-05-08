@@ -3,7 +3,6 @@ inherit:
 
 training:
     task: linear_regression
-    dataset_name: "imdb"
     # curriculum is not actually used for the language finetuning
     curriculum:
         points:
@@ -11,6 +10,10 @@ training:
             end: 41
             inc: 2
             interval: 2000
+
+data:
+    dataset_name: 'stanfordnlp/sst2'
+    text_key: 'sentence'
 
 out_dir: ../models/linear_regression/synth_pretrained/gpt2-small
 

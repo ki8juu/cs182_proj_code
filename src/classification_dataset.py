@@ -7,12 +7,10 @@ import torch
 # TODO: create a base dataset class!
 # TODO: make the input sequential
 # TODO: make it work with input output strings
-class MovieReviewsDataset(Dataset):
+class LanguageDataset(Dataset):
   r"""PyTorch Dataset class for loading data.
 
   This is where the data parsing happens.
-
-  This class is built with reusability in mind: it can be used as is as.
 
   Arguments:
 
@@ -21,7 +19,7 @@ class MovieReviewsDataset(Dataset):
 
   """
 
-  def __init__(self):
+  def __init__(self, dataset_name, text_key, num_incontext):
 
     # Check if path exists.
     # if not os.path.isdir(path):
@@ -30,7 +28,7 @@ class MovieReviewsDataset(Dataset):
 
 
     # TODO: this is hardcoded, eventually, don't do this!
-    self.dataset = load_dataset('imdb')
+    self.dataset = load_dataset(dataset_name)
 
     # TODO: for now, lets just use train
     self.dataset['train'] = self.dataset['train'].shuffle(seed=42)
@@ -38,8 +36,15 @@ class MovieReviewsDataset(Dataset):
 
     # randomly shuffle and sample from the dataset
 
+    # TODO: sometimes its 'sentence' or 'text'
+
     self.texts = []
     self.labels = []
+
+    print(len(self.dataset['train']))
+    print(len(self.dataset['test']))
+
+    print(num_incontext, "number of in context examples")
 
     max_examples = len(self.dataset['train']) // 11
 
@@ -47,8 +52,8 @@ class MovieReviewsDataset(Dataset):
     while i < max_examples:
         context = []
         for j in range(10):
-            context.append("\n".join([self.dataset['train'][i + j]['text'], 'pos' if self.dataset['train'][i + j]['label'] else 'neg']))
-        context.append(self.dataset['train'][i + 10]['text'])
+            context.append("\n".join([self.dataset['train'][i + j][text_key], 'pos' if self.dataset['train'][i + j]['label'] else 'neg']))
+        context.append(self.dataset['train'][i + 10][text_key])
         self.texts.append("\n\n".join(context))
         self.labels.append('pos' if self.dataset['train'][i + j]['label'] else 'neg')
         i += 1
