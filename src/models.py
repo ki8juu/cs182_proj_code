@@ -26,7 +26,7 @@ def build_model(conf, seq):
                     model = TransformerModel(conf.n_dims, conf.n_positions, preconfigured=conf.name, n_embd=conf.n_embd, seq=seq)
             else:
                 print("Building language model from a pre-trained GPT2 synthetic model")  
-                model = FromSyntheticTransformerModel(conf.n_dims, conf.synth_ckpt, conf.name, conf.n_positions, family=conf.family,  n_embd=conf.n_embd, freeze_ln=conf.freeze_ln, seq=seq)
+                model = FromSyntheticTransformerModel(conf.n_dims, conf.synth_ckpt, conf.name, conf.n_positions, family=conf.family,  n_embd=conf.n_embd, freeze_ln=conf.freeze_ln, seq=seq, random_init=conf.random_init)
         else:
             model = TransformerModel(
                 n_dims=conf.n_dims,
@@ -253,7 +253,7 @@ class FromLanguageTransformerModel(nn.Module):
         return prediction[:, ::2, :][:, inds]  # predict only on xs
     
 class FromSyntheticTransformerModel(nn.Module):
-    def __init__(self, n_dims, synth_ckpt_dir, pretrained_language_ckpt, n_positions, n_embd=128, n_layer=12, n_head=4, family="gpt2", freeze_ln=False, seq=False):
+    def __init__(self, n_dims, synth_ckpt_dir, pretrained_language_ckpt, n_positions, n_embd=128, n_layer=12, n_head=4, family="gpt2", freeze_ln=False, seq=False, random_init=False):
         super(FromSyntheticTransformerModel, self).__init__()
 
         self.name = family
@@ -276,15 +276,16 @@ class FromSyntheticTransformerModel(nn.Module):
         synthetic_model = TransformerModel(n_dims, n_positions, n_embd, n_layer, n_head, seq)
         # load synthetic model
         # TODO: erroring for now because we don't have a properly trained synthetic model
-        # state_path = os.path.join(synth_ckpt_dir, "state.pt")
-        # print("where the synthetic_model is", state_path)
-        # if os.path.exists(state_path):
-        #     state = torch.load(state_path)
-        #     synthetic_model.load_state_dict(state["model_state_dict"])
-        # else: 
-        #     # TODO: change this error
-        #     raise ValueError('Model path does not exist')
 
+        if not random_init:
+            state_path = os.path.join(synth_ckpt_dir, "state.pt")
+            print("where the synthetic_model is", state_path)
+            if os.path.exists(state_path):
+                state = torch.load(state_path)
+                synthetic_model.load_state_dict(state["model_state_dict"])
+            else: 
+                # TODO: change this error
+                raise ValueError('Model path does not exist')
 
         self._backbone = synthetic_model._backbone
 

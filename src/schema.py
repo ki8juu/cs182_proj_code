@@ -28,7 +28,8 @@ model_schema = {
     "n_head": merge(tinteger, required),
     "language_finetune": merge(tboolean, default(False)),
     "synth_ckpt": merge(tstring),
-    "preconfig": merge(tboolean, default(False))
+    "preconfig": merge(tboolean, default(False)),
+    "random_init": merge(tboolean, default(False))
 }
 
 curriculum_base_schema = {
