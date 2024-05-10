@@ -132,7 +132,7 @@ class TransformerModel(nn.Module):
     def _combine(xs_b, ys_b, seq):
         """Interleaves the x's and the y's into a single sequence."""
         bsize, points, dim = xs_b.shape
-        print("is seq", seq)
+        # print("is seq", seq)
         if not seq:
             ys_b = torch.cat(
                 (
