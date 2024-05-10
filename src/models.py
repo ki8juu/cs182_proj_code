@@ -261,22 +261,11 @@ class FromSyntheticTransformerModel(nn.Module):
         self.n_dims = n_dims
 
         # TODO(emma): set name 
-
-        # self.n_positions = n_positions
-        # self.n_dims = n_dims
-        # self._read_in = nn.Linear(n_dims, n_embd)
-
-        # checkpoint should be the model trained on synthetic data, remember, it has the liear layer/MLP, which we do not want.
         
-        # take just the pretrained transformer backbone
-        # take pretrained embedder -- might have some issues with the embedder resize
-
         # finetune just the layer norms and the output unembedding? maybe? not sure how large that is
-        
         synthetic_model = TransformerModel(n_dims, n_positions, n_embd, n_layer, n_head, seq)
+       
         # load synthetic model
-        # TODO: erroring for now because we don't have a properly trained synthetic model
-
         if not random_init:
             state_path = os.path.join(synth_ckpt_dir, "state.pt")
             print("where the synthetic_model is", state_path)
@@ -307,11 +296,6 @@ class FromSyntheticTransformerModel(nn.Module):
                 if 'layer_norm' not in name and 'wpe' not in name:
                     param.requires_grad = False
     def forward(self, **args):
-        # outputs = self._backbone(**args)
-        # hidden_states = outputs[0]
-        # logits = self.classifier(hidden_states)
-        # return logits
-
         args_without_labels = args.copy()
         labels = args_without_labels.pop('labels', None)
 
