@@ -20,8 +20,9 @@ model:
     name: openai-community/gpt2-medium
     preconfig: true
     n_embd: 1024
+    language_finetune: true
     # this is a dummy one right now
-    synth_ckpt: "../models/linear_regression/dcedb1e3-0af2-4a25-b29a-41be558183ee"
+    synth_ckpt: "../models/linear_regression/synth_base/gpt2-med/5bec1e11-6f50-48f5-a13d-cdc1c89727c2"
 
 wandb:
     name: "linear_regression_from_synth_gpt2med"
