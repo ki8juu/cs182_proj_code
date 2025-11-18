@@ -1,0 +1,8 @@
+inherit:
+    - linear_regression.yaml
+    - models/lstm_attention.yaml
+
+out_dir: ../models/linear_regression_lstm_attention
+
+wandb:
+    name: "linear_regression_lstm_attention"
