@@ -1,3 +1,4 @@
+from statistics import variance
 import torch
 import torch.nn as nn
 from transformers import GPT2Model, GPT2Config
@@ -28,8 +29,25 @@ def build_model(conf):
 
 def get_relevant_baselines(task_name):
     task_to_baselines = {
+        "laplace_weighted_regression": [
+            (LeastSquaresModel, {}),
+            (RidgeModel, {"alpha": 0.5}),
+        ],
+        "exponential_weighted_regression": [
+            (LeastSquaresModel, {}),
+            (RidgeModel, {"alpha": 0.5}),
+        ],
+        "uniform_hypersphere_regression": [
+            (LeastSquaresModel, {}),
+            (RidgeModel, {"alpha": 0.1}),
+            (RidgeModel, {"alpha": 0.5}),
+            (NNModel, {"n_neighbors": 3}),
+            (AveragingModel, {}),
+        ],
         "linear_regression": [
             (LeastSquaresModel, {}),
+            (RidgeModel, {"alpha": 0.1}),
+            (RidgeModel, {"alpha": 0.5}),
             (NNModel, {"n_neighbors": 3}),
             (AveragingModel, {}),
         ],
@@ -41,6 +59,7 @@ def get_relevant_baselines(task_name):
             (LeastSquaresModel, {}),
             (NNModel, {"n_neighbors": 3}),
             (AveragingModel, {}),
+            (RidgeModel, {"alpha": 0.5}),
         ]
         + [(LassoModel, {"alpha": alpha}) for alpha in [1, 0.1, 0.01, 0.001, 0.0001]],
         "relu_2nn_regression": [
@@ -71,6 +90,26 @@ def get_relevant_baselines(task_name):
             (XGBoostModel, {}),
             (AveragingModel, {}),
         ],
+        "noisy_linear_regression": [
+            (LeastSquaresModel, {}),
+            # (RidgeModel, {"alpha": 0.1}),
+            (RidgeModel, {"alpha": 0.5}),
+            (RidgeModelWithVarianceAdjustment, {"alpha": 0.5, "ar_coef": 0.5}),
+            (FeasibleGLSModel, {"ar_coef": None}),
+            (GLSModel, {"ar_coef": 0.5}),
+            (NNModel, {"n_neighbors": 3}),
+            (AveragingModel, {}),
+        ],
+        # "ar1_linear_regression": [
+        #     (LeastSquaresModel, {}),
+        #     (RidgeModel, {"alpha": 0.1}),
+        #     (RidgeModel, {"alpha": 1.0}),
+        #     (RidgeModelWithVarianceAdjustment, {"alpha": 1.0, "ar_coef": 0.5}),
+        #     (FeasibleGLSModel, {"ar_coef": None}),
+        #     (GLSModel, {"ar_coef": 0.5}),
+        #     (NNModel, {"n_neighbors": 3}),
+        #     (AveragingModel, {}),
+        # ],
     }
 
     models = [model_cls(**kwargs) for model_cls, kwargs in task_to_baselines[task_name]]
@@ -99,7 +138,7 @@ class TransformerModel(nn.Module):
         self._read_out = nn.Linear(n_embd, 1)
 
     @staticmethod
-    def _combine(xs_b, ys_b):
+    def _combine(xs_b, ys_b): # Create sequence context by interleaving x's and y's
         """Interleaves the x's and the y's into a single sequence."""
         bsize, points, dim = xs_b.shape
         ys_b_wide = torch.cat(
@@ -475,3 +514,350 @@ class XGBoostModel:
             preds.append(pred)
 
         return torch.stack(preds, dim=1)
+
+class RidgeModel:
+    def __init__(self, alpha=1.0):
+        """
+        Ridge regression model with L2 regularization.
+        alpha: regularization strength (larger values = more regularization)
+        """
+        self.alpha = alpha
+        self.name = f"ridge_alpha={alpha}"
+
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))  # predict zero for first point
+                continue
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+
+            # Ridge regression: (X'X + alpha*I)^(-1) X'y
+            # Add regularization term to diagonal
+            XtX = train_xs.transpose(-2, -1) @ train_xs
+            Xty = train_xs.transpose(-2, -1) @ train_ys.unsqueeze(-1)
+            
+            # Add alpha * I to diagonal
+            reg_matrix = XtX + self.alpha * torch.eye(XtX.shape[-1], device=XtX.device)
+            
+            try:
+                ws = torch.linalg.solve(reg_matrix, Xty)
+                pred = test_x @ ws
+                preds.append(pred[:, 0, 0])
+            except torch.linalg.LinAlgError:
+                # Fallback to least squares if singular
+                ws, _, _, _ = torch.linalg.lstsq(train_xs, train_ys.unsqueeze(2))
+                pred = test_x @ ws
+                preds.append(pred[:, 0, 0])
+
+        return torch.stack(preds, dim=1)
+
+
+class RidgeModelWithVarianceAdjustment:
+    def __init__(self, alpha=1.0, ar_coef=0.5):
+        """
+        Ridge regression with variance adjustment for AR(1) data.
+        alpha: regularization strength
+        ar_coef: AR(1) coefficient for variance adjustment
+        """
+        self.alpha = alpha
+        self.ar_coef = ar_coef
+        self.name = f"ridge_var_adj_alpha={alpha}_ar={ar_coef}"
+
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))
+                continue
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+
+            # Create AR(1) covariance matrix for variance adjustment
+            n = train_xs.shape[1]
+            ar_cov = self._create_ar1_covariance(n, self.ar_coef)
+            
+            # Weighted Ridge regression: (X'V^(-1)X + alpha*I)^(-1) X'V^(-1)y
+            try:
+                ar_cov_inv = torch.linalg.inv(ar_cov)
+                XtV_inv = train_xs.transpose(-2, -1) @ ar_cov_inv
+                XtV_invX = XtV_inv @ train_xs
+                XtV_invy = XtV_inv @ train_ys.unsqueeze(-1)
+                
+                # Add regularization
+                reg_matrix = XtV_invX + self.alpha * torch.eye(XtV_invX.shape[-1], device=XtV_invX.device)
+                ws = torch.linalg.solve(reg_matrix, XtV_invy)
+                pred = test_x @ ws
+                preds.append(pred[:, 0, 0])
+            except torch.linalg.LinAlgError:
+                # Fallback to regular ridge
+                XtX = train_xs.transpose(-2, -1) @ train_xs
+                Xty = train_xs.transpose(-2, -1) @ train_ys.unsqueeze(-1)
+                reg_matrix = XtX + self.alpha * torch.eye(XtX.shape[-1], device=XtX.device)
+                ws = torch.linalg.solve(reg_matrix, Xty)
+                pred = test_x @ ws
+                preds.append(pred[:, 0, 0])
+
+        return torch.stack(preds, dim=1)
+
+    def _create_ar1_covariance(self, n, ar_coef):
+        """Create AR(1) covariance matrix: V[i,j] = ar_coef^|i-j|"""
+        indices = torch.arange(n, dtype=torch.float32)
+        diff = torch.abs(indices.unsqueeze(0) - indices.unsqueeze(1))
+        return torch.pow(ar_coef, diff)
+
+
+class FeasibleGLSModel:
+    def __init__(self, ar_coef=None):
+        """
+        Feasible GLS for AR(1) data with unknown AR coefficient.
+        ar_coef: if None, estimate from residuals; otherwise use fixed value
+        """
+        self.ar_coef = ar_coef
+        self.name = f"feasible_gls_ar={'est' if ar_coef is None else ar_coef}"
+
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))
+                continue
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+
+            pred = torch.zeros_like(ys[:, 0])
+            for j in range(ys.shape[0]):
+                x_j, y_j = train_xs[j], train_ys[j]
+                
+                # Step 1: OLS to get initial residuals
+                try:
+                    w_ols, _, _, _ = torch.linalg.lstsq(x_j, y_j.unsqueeze(-1))
+                    residuals = y_j - (x_j @ w_ols).squeeze()
+                except torch.linalg.LinAlgError:
+                    pred[j] = 0.0
+                    continue
+                
+                # Step 2: Estimate AR coefficient from residuals
+                if self.ar_coef is None and len(residuals) > 1:
+                    # Estimate AR(1) coefficient using Yule-Walker equations
+                    ar_coef_est = self._estimate_ar_coef(residuals)
+                else:
+                    ar_coef_est = self.ar_coef if self.ar_coef is not None else 0.0
+                
+                # Step 3: Create covariance matrix and perform GLS
+                if len(residuals) > 1:
+                    n = len(residuals)
+                    ar_cov = self._create_ar1_covariance(n, ar_coef_est)
+                    
+                    try:
+                        ar_cov_inv = torch.linalg.inv(ar_cov)
+                        XtV_inv = x_j.transpose(-1, -2) @ ar_cov_inv
+                        XtV_invX = XtV_inv @ x_j
+                        XtV_invy = XtV_inv @ y_j.unsqueeze(-1)
+                        
+                        w_gls = torch.linalg.solve(XtV_invX, XtV_invy)
+                        y_pred = (test_x[j] @ w_gls).squeeze()
+                        pred[j] = y_pred
+                    except torch.linalg.LinAlgError:
+                        # Fallback to OLS
+                        y_pred = (test_x[j] @ w_ols).squeeze()
+                        pred[j] = y_pred
+                else:
+                    # Not enough data for GLS, use OLS
+                    y_pred = (test_x[j] @ w_ols).squeeze()
+                    pred[j] = y_pred
+
+            preds.append(pred)
+
+        return torch.stack(preds, dim=1)
+
+    def _estimate_ar_coef(self, residuals):
+        """Estimate AR(1) coefficient using Yule-Walker equations (returns a torch.Tensor scalar)."""
+        # Ensure residuals is a torch tensor
+        if not isinstance(residuals, torch.Tensor):
+            residuals = torch.tensor(residuals, dtype=torch.float32)
+
+        if residuals.numel() <= 1:
+            # return tensor scalar on same device
+            return torch.tensor(0.0, dtype=torch.float32, device=residuals.device)
+
+        # Use unbiased-ish estimators:
+        n = residuals.shape[0]
+        # gamma_0: variance (use unbiased? here regular torch.var with unbiased=False to match mean-of-squares)
+        gamma_0 = torch.var(residuals, unbiased=False)
+        gamma_1 = torch.mean(residuals[:-1] * residuals[1:])
+
+        # avoid division by (near) zero
+        if gamma_0.item() <= 1e-10:
+            ar_coef = torch.tensor(0.0, dtype=torch.float32, device=residuals.device)
+        else:
+            ar_coef = gamma_1 / gamma_0
+            # ensure tensor type & correct device
+            if not isinstance(ar_coef, torch.Tensor):
+                ar_coef = torch.tensor(ar_coef, dtype=torch.float32, device=residuals.device)
+            else:
+                ar_coef = ar_coef.to(dtype=torch.float32, device=residuals.device)
+
+            # clamp safely as tensor
+            ar_coef = torch.clamp(ar_coef, -0.99, 0.99)
+
+        return ar_coef  # tensor scalar
+
+    def _create_ar1_covariance(self, n, ar_coef, device=None, dtype=torch.float32):
+        """Create AR(1) covariance matrix V[i,j] = ar_coef**|i-j|.
+        ar_coef may be float or torch scalar; this returns a torch.Tensor (n x n).
+        """
+        if device is None:
+            # default CPU
+            device = torch.device("cpu")
+
+        # make ar_coef a tensor scalar on correct device
+        if not isinstance(ar_coef, torch.Tensor):
+            ar_coef_t = torch.tensor(ar_coef, dtype=dtype, device=device)
+        else:
+            ar_coef_t = ar_coef.to(device=device, dtype=dtype)
+
+        indices = torch.arange(n, dtype=dtype, device=device)
+        diff = torch.abs(indices.unsqueeze(0) - indices.unsqueeze(1)).to(dtype=dtype)
+
+        # use torch.pow with tensor base and tensor exponent
+        # (ensure ar_coef_t is broadcastable)
+        return torch.pow(ar_coef_t, diff)
+
+
+class GLSModel:
+    def __init__(self, ar_coef=0.5):
+        """
+        GLS with known AR(1) covariance structure.
+        ar_coef: known AR(1) coefficient
+        """
+        self.ar_coef = ar_coef
+        self.name = f"gls_ar={ar_coef}"
+
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))
+                continue
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+
+            # Create AR(1) covariance matrix
+            n = train_xs.shape[1]
+            ar_cov = self._create_ar1_covariance(n, self.ar_coef)
+            
+            try:
+                ar_cov_inv = torch.linalg.inv(ar_cov)
+                XtV_inv = train_xs.transpose(-2, -1) @ ar_cov_inv
+                XtV_invX = XtV_inv @ train_xs
+                XtV_invy = XtV_inv @ train_ys.unsqueeze(-1)
+                
+                w_gls = torch.linalg.solve(XtV_invX, XtV_invy)
+                pred = test_x @ w_gls
+                preds.append(pred[:, 0, 0])
+            except torch.linalg.LinAlgError:
+                # Fallback to OLS
+                ws, _, _, _ = torch.linalg.lstsq(train_xs, train_ys.unsqueeze(2))
+                pred = test_x @ ws
+                preds.append(pred[:, 0, 0])
+
+        return torch.stack(preds, dim=1)
+
+    def _create_ar1_covariance(self, n, ar_coef):
+        """Create AR(1) covariance matrix"""
+        indices = torch.arange(n, dtype=torch.float32)
+        diff = torch.abs(indices.unsqueeze(0) - indices.unsqueeze(1))
+        return torch.pow(ar_coef, diff)
+class WeightedLeastSquaresModel:
+    def __init__(self, variance_model='ols_residual'):
+        """WLS: Heteroscedasticity (V is diagnol matrix)"""
+        self.variance_model = variance_model
+        self.name = f"wls_var_model={variance_model}"
+
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))
+                continue
+
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+
+            weights = self._estimate_weights(train_xs, train_ys)
+            sqrt_w = torch.sqrt(torch.clamp(weights, min=1e-8))
+
+            weighted_xs = train_xs * sqrt_w.unsqueeze(-1)
+            weighted_ys = train_ys * sqrt_w
+
+            try:
+                ws, _, _, _ = torch.linalg.lstsq(weighted_xs, weighted_ys.unsqueeze(-1))
+            except torch.linalg.LinAlgError:
+                # fall back to standard OLS if the weighted system is ill-conditioned
+                ws, _, _, _ = torch.linalg.lstsq(train_xs, train_ys.unsqueeze(-1))
+
+            pred = test_x @ ws
+            preds.append(pred[:, 0, 0])
+
+        return torch.stack(preds, dim=1)
+
+    def _estimate_weights(self, train_xs, train_ys):
+        """Return diagonal weights (inverse variances) for WLS."""
+        if self.variance_model == "uniform":
+            return torch.ones_like(train_ys)
+
+        if self.variance_model == "ols_residual":
+            try:
+                ws, _, _, _ = torch.linalg.lstsq(train_xs, train_ys.unsqueeze(-1))
+                preds = (train_xs @ ws).squeeze(-1)
+                residuals = train_ys - preds
+                variances = residuals.pow(2)
+                variances = torch.clamp(variances, min=1e-6)
+                weights = 1.0 / variances
+                return weights
+            except torch.linalg.LinAlgError:
+                return torch.ones_like(train_ys)
+
+        raise ValueError(f"Unknown variance_model '{self.variance_model}' for WLS")

@@ -35,6 +35,61 @@ def sample_seeds(total_seeds, count):
     return seeds
 
 
+def _sanitize_training_kwargs(args):
+    """
+    Remove conflicting/irrelevant kwargs to avoid sampler/task constructor errors.
+    Rules:
+    - data_kwargs: keep 'k' ONLY when data == 'sparse_gaussian' (k = number of non-zero coords).
+    - task_kwargs: keep 'sparsity' ONLY when task == 'sparse_linear_regression'.
+    - In addition, apply per-task and per-data whitelists to drop unsupported keys.
+    """
+    # Defensive copy
+    data_kwargs = dict(getattr(args.training, "data_kwargs", {}) or {})
+    task_kwargs = dict(getattr(args.training, "task_kwargs", {}) or {})
+
+    # Per-data whitelists
+    data_whitelist = {
+        "gaussian": {"bias", "scale"},
+        "sparse_gaussian": {"k", "bias", "scale"},
+        "ar1": {"rho", "noise_std", "bias", "scale", "compute_gradient"},
+        "vr1": {"ar1_mat", "noise_std", "bias", "scale"},
+        "ar2": {"ar1_coef", "ar2_coef", "noise_std", "bias", "scale"},
+        "vr2": {"ar1_mat", "ar2_mat", "noise_std", "bias", "scale"},
+        "nonstation": {"coef_base", "coef_amplitude", "noise_std", "bias", "scale"},
+    }
+
+    data_name = args.training.data
+    if data_name in data_whitelist:
+        allowed = data_whitelist[data_name]
+        data_kwargs = {k: v for k, v in data_kwargs.items() if k in allowed}
+    else:
+        # Unknown data: drop potentially conflicting keys
+        data_kwargs = {}
+
+    # Per-task whitelists
+    task_whitelist = {
+        "linear_regression": {"scale", "uniform"},
+        "sparse_linear_regression": {"scale", "sparsity", "valid_coords"},
+        "linear_classification": {"scale", "uniform"},
+        "relu_2nn_regression": {"scale", "hidden_layer_size"},
+        "decision_tree": {"depth"},
+        "noisy_linear_regression": {"scale", "noise_std", "renormalize_ys", "noise_type", "uniform"},
+        "ar1_linear_regression": {"scale", "ar_coef", "noise_std", "compute_gradient"},
+        "uniform_hypersphere_regression": {"scale"},
+    }
+
+    task_name = args.training.task
+    if task_name in task_whitelist:
+        allowed = task_whitelist[task_name]
+        task_kwargs = {k: v for k, v in task_kwargs.items() if k in allowed}
+    else:
+        # Unknown task: be conservative
+        task_kwargs = {}
+
+    args.training.data_kwargs = data_kwargs
+    args.training.task_kwargs = task_kwargs
+
+
 def train(model, args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.training.learning_rate)
     curriculum = Curriculum(args.training.curriculum)
@@ -51,13 +106,16 @@ def train(model, args):
 
     n_dims = model.n_dims
     bsize = args.training.batch_size
-    data_sampler = get_data_sampler(args.training.data, n_dims=n_dims)
+
+    # Sanitize kwargs before constructing samplers/tasks to prevent conflicts
+    _sanitize_training_kwargs(args)
+
+    data_sampler = get_data_sampler(args.training.data, n_dims=n_dims, **args.training.data_kwargs)
     task_sampler = get_task_sampler(
-        args.training.task,
-        n_dims,
-        bsize,
-        num_tasks=args.training.num_tasks,
-        **args.training.task_kwargs,
+        args.training.task, 
+        n_dims=n_dims,
+        batch_size=args.training.batch_size,
+        **args.training.task_kwargs
     )
     pbar = tqdm(range(starting_step, args.training.train_steps))
 
@@ -97,7 +155,7 @@ def train(model, args):
                 max(curriculum.n_dims_truncated - ii, 0)
                 for ii in range(curriculum.n_points)
             )
-            / curriculum.n_points
+/ curriculum.n_points
         )
 
         if i % args.wandb.log_every_steps == 0 and not args.test_run:
