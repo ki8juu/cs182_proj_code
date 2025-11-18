@@ -10,6 +10,75 @@ import xgboost as xgb
 
 from base_models import NeuralNetwork, ParallelNetworks
 
+def _count_parameters(module):
+    return sum(p.numel() for p in module.parameters() if p.requires_grad)
+
+
+def _align_hidden_dim(hidden_dim, alignment):
+    if hidden_dim < alignment:
+        return alignment
+    remainder = hidden_dim % alignment
+    if remainder == 0:
+        return hidden_dim
+    return hidden_dim + (alignment - remainder)
+
+
+def _match_lstm_like_dimensions(conf, template_kwargs, builder, *, alignment):
+    initial_hidden = _align_hidden_dim(
+        getattr(conf, "lstm_hidden_dim", conf.n_embd), alignment
+    )
+    target_model = TransformerModel(
+        n_dims=conf.n_dims,
+        n_positions=conf.n_positions,
+        n_embd=conf.n_embd,
+        n_layer=conf.n_layer,
+        n_head=conf.n_head,
+    )
+    target_params = _count_parameters(target_model)
+
+    visited = set()
+    candidates_checked = 0
+    max_candidates = 4096
+
+    def _candidate_iter():
+        yield initial_hidden
+        offset = 1
+        while True:
+            plus = initial_hidden + offset * alignment
+            minus = initial_hidden - offset * alignment
+            if plus >= alignment:
+                yield plus
+            if minus >= alignment:
+                yield minus
+            offset += 1
+
+    for hidden_dim in _candidate_iter():
+        if hidden_dim in visited:
+            continue
+        visited.add(hidden_dim)
+        candidates_checked += 1
+        if candidates_checked > max_candidates:
+            break
+        probe_kwargs = dict(template_kwargs, hidden_dim=hidden_dim, mlp_hidden_dim=1)
+        probe_model = builder(**probe_kwargs)
+        base_count = _count_parameters(probe_model)
+        if base_count > target_params:
+            continue
+        slope_kwargs = dict(probe_kwargs)
+        slope_kwargs["mlp_hidden_dim"] = 2
+        slope_model = builder(**slope_kwargs)
+        slope = _count_parameters(slope_model) - base_count
+        if slope <= 0:
+            continue
+        diff = target_params - base_count
+        if diff % slope != 0:
+            continue
+        mlp_hidden_dim = (diff // slope) + 1
+        return hidden_dim, mlp_hidden_dim, target_params
+
+    raise ValueError(
+        "Unable to find LSTM dimensions that match the transformer's parameter count."
+    )
 
 def build_model(conf):
     if conf.family == "gpt2":
@@ -20,6 +89,92 @@ def build_model(conf):
             n_layer=conf.n_layer,
             n_head=conf.n_head,
         )
+    elif conf.family == "lstm":
+        template_kwargs = dict(
+            n_dims=conf.n_dims,
+            n_positions=conf.n_positions,
+            n_embd=conf.n_embd,
+            num_layers=getattr(conf, "lstm_num_layers", 2),
+            dropout=getattr(conf, "lstm_dropout", 0.0),
+            mlp_multiplier=getattr(conf, "lstm_mlp_multiplier", 4.0),
+        )
+        match_params = getattr(conf, "lstm_match_transformer_params", True)
+        mlp_hidden_dim = getattr(conf, "lstm_mlp_hidden_dim", None)
+        if match_params:
+            hidden_dim, mlp_hidden_dim, target_params = _match_lstm_like_dimensions(
+                conf,
+                template_kwargs,
+                LSTMModel,
+                alignment=1,
+            )
+        else:
+            hidden_dim = _align_hidden_dim(
+                getattr(conf, "lstm_hidden_dim", conf.n_embd), 1
+            )
+            if mlp_hidden_dim is None:
+                multiplier = getattr(conf, "lstm_mlp_multiplier", 4.0)
+                mlp_hidden_dim = max(1, int(round(hidden_dim * multiplier)))
+
+        model = LSTMModel(
+            hidden_dim=hidden_dim,
+            mlp_hidden_dim=mlp_hidden_dim,
+            **template_kwargs,
+        )
+
+        if match_params:
+            lstm_params = _count_parameters(model)
+            if lstm_params != target_params:
+                raise ValueError(
+                    "LSTM model parameter count mismatch after matching routine."
+                )
+    elif conf.family == "lstm_attention":
+        attn_heads = getattr(conf, "attn_num_heads", 4)
+        if attn_heads <= 0:
+            raise ValueError("attn_num_heads must be positive for the LSTM attention model")
+        if conf.n_layer <= 0 or conf.n_head <= 0:
+            raise ValueError(
+                "n_layer and n_head must be positive to define the transformer parameter budget"
+            )
+        template_kwargs = dict(
+            n_dims=conf.n_dims,
+            n_positions=conf.n_positions,
+            n_embd=conf.n_embd,
+            num_layers=getattr(conf, "lstm_num_layers", 2),
+            dropout=getattr(conf, "lstm_dropout", 0.0),
+            attn_heads=attn_heads,
+            attn_dropout=getattr(conf, "attn_dropout", 0.0),
+            attn_mlp_multiplier=getattr(conf, "attn_mlp_multiplier", 4.0),
+        )
+        match_params = getattr(conf, "lstm_match_transformer_params", True)
+        mlp_hidden_dim = getattr(conf, "attn_mlp_hidden_dim", None)
+
+        if match_params:
+            hidden_dim, mlp_hidden_dim, target_params = _match_lstm_like_dimensions(
+                conf,
+                template_kwargs,
+                LSTMAttentionModel,
+                alignment=attn_heads,
+            )
+        else:
+            hidden_dim = _align_hidden_dim(
+                getattr(conf, "lstm_hidden_dim", conf.n_embd), attn_heads
+            )
+            if mlp_hidden_dim is None:
+                multiplier = getattr(conf, "attn_mlp_multiplier", 4.0)
+                mlp_hidden_dim = max(1, int(round(hidden_dim * multiplier)))
+
+        model = LSTMAttentionModel(
+            hidden_dim=hidden_dim,
+            mlp_hidden_dim=mlp_hidden_dim,
+            **template_kwargs,
+        )
+
+        if match_params:
+            lstm_params = _count_parameters(model)
+            if lstm_params != target_params:
+                raise ValueError(
+                    "LSTM attention model parameter count mismatch after matching routine."
+                )
     else:
         raise NotImplementedError
 
@@ -126,6 +281,175 @@ class TransformerModel(nn.Module):
         prediction = self._read_out(output)
         return prediction[:, ::2, 0][:, inds]  # predict only on xs
 
+class FinalAttentionBlock(nn.Module):
+    def __init__(self, hidden_dim, num_heads, dropout, mlp_hidden_dim):
+        super().__init__()
+        if hidden_dim % num_heads != 0:
+            raise ValueError("hidden_dim must be divisible by the number of attention heads")
+        if mlp_hidden_dim < 1:
+            raise ValueError("mlp_hidden_dim must be at least 1")
+        self.query_norm = nn.LayerNorm(hidden_dim)
+        self.context_norm = nn.LayerNorm(hidden_dim)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.attn_dropout = nn.Dropout(dropout)
+        self.mlp_norm = nn.LayerNorm(hidden_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden_dim, hidden_dim),
+        )
+        self.mlp_dropout = nn.Dropout(dropout)
+
+    def forward(self, query, context):
+        context_norm = self.context_norm(context)
+        attn_out, _ = self.attn(self.query_norm(query), context_norm, context_norm)
+        query = query + self.attn_dropout(attn_out)
+        mlp_out = self.mlp(self.mlp_norm(query))
+        return query + self.mlp_dropout(mlp_out)
+
+class LSTMModel(nn.Module):
+    def __init__(
+        self,
+        n_dims,
+        n_positions,
+        n_embd=128,
+        hidden_dim=256,
+        num_layers=2,
+        dropout=0.0,
+        mlp_hidden_dim=None,
+        mlp_multiplier=4.0,
+    ):
+        super().__init__()
+        self.name = f"lstm_embd={n_embd}_hidden={hidden_dim}_layers={num_layers}"
+        self.n_positions = n_positions
+        self.n_dims = n_dims
+        self._read_in = nn.Linear(n_dims, n_embd)
+        self._encoder = nn.LSTM(
+            input_size=n_embd,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+        )
+        if mlp_hidden_dim is None:
+            mlp_hidden_dim = max(1, int(round(hidden_dim * mlp_multiplier)))
+        self.mlp_hidden_dim = mlp_hidden_dim
+        self.name += f"_mlp={mlp_hidden_dim}"
+        self._mlp_norm = nn.LayerNorm(hidden_dim)
+        self._mlp = nn.Sequential(
+            nn.Linear(hidden_dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Linear(mlp_hidden_dim, hidden_dim),
+        )
+        self._mlp_dropout = nn.Dropout(dropout)
+        self._read_out = nn.Linear(hidden_dim, 1)
+
+    @staticmethod
+    def _combine(xs_b, ys_b):
+        bsize, points, dim = xs_b.shape
+        ys_b_wide = torch.cat(
+            (
+                ys_b.view(bsize, points, 1),
+                torch.zeros(bsize, points, dim - 1, device=ys_b.device),
+            ),
+            axis=2,
+        )
+        zs = torch.stack((xs_b, ys_b_wide), dim=2)
+        zs = zs.view(bsize, 2 * points, dim)
+        return zs
+
+    def forward(self, xs, ys, inds=None):
+        if inds is None:
+            inds = torch.arange(ys.shape[1], device=ys.device, dtype=torch.long)
+        else:
+            inds = torch.tensor(inds, device=ys.device, dtype=torch.long)
+            if max(inds).item() >= ys.shape[1] or min(inds).item() < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        zs = self._combine(xs, ys)
+        embeds = self._read_in(zs)
+        encoded, _ = self._encoder(embeds)
+        query = encoded[:, ::2, :]
+        mlp_out = self._mlp(self._mlp_norm(query))
+        query = query + self._mlp_dropout(mlp_out)
+        prediction = self._read_out(query)[..., 0]
+        return prediction[:, inds]
+
+class LSTMAttentionModel(nn.Module):
+    def __init__(
+        self,
+        n_dims,
+        n_positions,
+        n_embd=128,
+        hidden_dim=256,
+        num_layers=2,
+        dropout=0.0,
+        attn_heads=4,
+        attn_dropout=0.0,
+        mlp_hidden_dim=None,
+        attn_mlp_multiplier=4.0,
+    ):
+        super().__init__()
+        self.name = (
+            f"lstm_attention_embd={n_embd}_hidden={hidden_dim}_layers={num_layers}_heads={attn_heads}"
+        )
+        self.n_positions = n_positions
+        self.n_dims = n_dims
+        self._read_in = nn.Linear(n_dims, n_embd)
+        self._encoder = nn.LSTM(
+            input_size=n_embd,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+        )
+        if mlp_hidden_dim is None:
+            mlp_hidden_dim = max(1, int(round(hidden_dim * attn_mlp_multiplier)))
+        self.mlp_hidden_dim = mlp_hidden_dim
+        self.name += f"_mlp={mlp_hidden_dim}"
+        self._attn_block = FinalAttentionBlock(
+            hidden_dim=hidden_dim,
+            num_heads=attn_heads,
+            dropout=attn_dropout,
+            mlp_hidden_dim=mlp_hidden_dim,
+        )
+        self._read_out = nn.Linear(hidden_dim, 1)
+
+    @staticmethod
+    def _combine(xs_b, ys_b):
+        bsize, points, dim = xs_b.shape
+        ys_b_wide = torch.cat(
+            (
+                ys_b.view(bsize, points, 1),
+                torch.zeros(bsize, points, dim - 1, device=ys_b.device),
+            ),
+            axis=2,
+        )
+        zs = torch.stack((xs_b, ys_b_wide), dim=2)
+        zs = zs.view(bsize, 2 * points, dim)
+        return zs
+
+    def forward(self, xs, ys, inds=None):
+        if inds is None:
+            inds = torch.arange(ys.shape[1], device=ys.device, dtype=torch.long)
+        else:
+            inds = torch.tensor(inds, device=ys.device, dtype=torch.long)
+            if max(inds).item() >= ys.shape[1] or min(inds).item() < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        zs = self._combine(xs, ys)
+        embeds = self._read_in(zs)
+        encoded, _ = self._encoder(embeds)
+        query = encoded[:, ::2, :]
+        attn_out = self._attn_block(query, encoded)
+        prediction = self._read_out(attn_out)[..., 0]
+        return prediction[:, inds]
 
 class NNModel:
     def __init__(self, n_neighbors, weights="uniform"):
