@@ -10,83 +10,83 @@ import xgboost as xgb
 
 from base_models import NeuralNetwork, ParallelNetworks
 
-def _count_parameters(module):
-    return sum(p.numel() for p in module.parameters() if p.requires_grad)
+# def _count_parameters(module):
+#     return sum(p.numel() for p in module.parameters() if p.requires_grad)
 
 
-def _align_hidden_dim(hidden_dim, alignment):
-    if hidden_dim < alignment:
-        return alignment
-    remainder = hidden_dim % alignment
-    if remainder == 0:
-        return hidden_dim
-    return hidden_dim + (alignment - remainder)
+# def _align_hidden_dim(hidden_dim, alignment):
+#     if hidden_dim < alignment:
+#         return alignment
+#     remainder = hidden_dim % alignment
+#     if remainder == 0:
+#         return hidden_dim
+#     return hidden_dim + (alignment - remainder)
 
 
-def _match_lstm_like_dimensions(
-    conf, template_kwargs, builder, *, alignment, has_mlp=True
-):
-    initial_hidden = _align_hidden_dim(
-        getattr(conf, "lstm_hidden_dim", conf.n_embd), alignment
-    )
-    target_model = TransformerModel(
-        n_dims=conf.n_dims,
-        n_positions=conf.n_positions,
-        n_embd=conf.n_embd,
-        n_layer=conf.n_layer,
-        n_head=conf.n_head,
-    )
-    target_params = _count_parameters(target_model)
+# def _match_lstm_like_dimensions(
+#     conf, template_kwargs, builder, *, alignment, has_mlp=True
+# ):
+#     initial_hidden = _align_hidden_dim(
+#         getattr(conf, "lstm_hidden_dim", conf.n_embd), alignment
+#     )
+#     target_model = TransformerModel(
+#         n_dims=conf.n_dims,
+#         n_positions=conf.n_positions,
+#         n_embd=conf.n_embd,
+#         n_layer=conf.n_layer,
+#         n_head=conf.n_head,
+#     )
+#     target_params = _count_parameters(target_model)
 
-    visited = set()
-    candidates_checked = 0
-    max_candidates = 4096
+#     visited = set()
+#     candidates_checked = 0
+#     max_candidates = 4096
 
-    def _candidate_iter():
-        yield initial_hidden
-        offset = 1
-        while True:
-            plus = initial_hidden + offset * alignment
-            minus = initial_hidden - offset * alignment
-            if plus >= alignment:
-                yield plus
-            if minus >= alignment:
-                yield minus
-            offset += 1
+#     def _candidate_iter():
+#         yield initial_hidden
+#         offset = 1
+#         while True:
+#             plus = initial_hidden + offset * alignment
+#             minus = initial_hidden - offset * alignment
+#             if plus >= alignment:
+#                 yield plus
+#             if minus >= alignment:
+#                 yield minus
+#             offset += 1
 
-    for hidden_dim in _candidate_iter():
-        if hidden_dim in visited:
-            continue
-        visited.add(hidden_dim)
-        candidates_checked += 1
-        if candidates_checked > max_candidates:
-            break
-        probe_kwargs = dict(template_kwargs, hidden_dim=hidden_dim)
-        if has_mlp:
-            probe_kwargs["mlp_hidden_dim"] = 1
-        probe_model = builder(**probe_kwargs)
-        base_count = _count_parameters(probe_model)
-        if base_count > target_params:
-            continue
-        if not has_mlp:
-            if base_count == target_params:
-                return {"hidden_dim": hidden_dim}, target_params
-            continue
-        slope_kwargs = dict(probe_kwargs)
-        slope_kwargs["mlp_hidden_dim"] = 2
-        slope_model = builder(**slope_kwargs)
-        slope = _count_parameters(slope_model) - base_count
-        if slope <= 0:
-            continue
-        diff = target_params - base_count
-        if diff % slope != 0:
-            continue
-        mlp_hidden_dim = (diff // slope) + 1
-        return {"hidden_dim": hidden_dim, "mlp_hidden_dim": mlp_hidden_dim}, target_params
+#     for hidden_dim in _candidate_iter():
+#         if hidden_dim in visited:
+#             continue
+#         visited.add(hidden_dim)
+#         candidates_checked += 1
+#         if candidates_checked > max_candidates:
+#             break
+#         probe_kwargs = dict(template_kwargs, hidden_dim=hidden_dim)
+#         if has_mlp:
+#             probe_kwargs["mlp_hidden_dim"] = 1
+#         probe_model = builder(**probe_kwargs)
+#         base_count = _count_parameters(probe_model)
+#         if base_count > target_params:
+#             continue
+#         if not has_mlp:
+#             if base_count == target_params:
+#                 return {"hidden_dim": hidden_dim}, target_params
+#             continue
+#         slope_kwargs = dict(probe_kwargs)
+#         slope_kwargs["mlp_hidden_dim"] = 2
+#         slope_model = builder(**slope_kwargs)
+#         slope = _count_parameters(slope_model) - base_count
+#         if slope <= 0:
+#             continue
+#         diff = target_params - base_count
+#         if diff % slope != 0:
+#             continue
+#         mlp_hidden_dim = (diff // slope) + 1
+#         return {"hidden_dim": hidden_dim, "mlp_hidden_dim": mlp_hidden_dim}, target_params
 
-    raise ValueError(
-        "Unable to find LSTM dimensions that match the transformer's parameter count."
-    )
+#     raise ValueError(
+#         "Unable to find LSTM dimensions that match the transformer's parameter count."
+#     )
 
 def build_model(conf):
     if conf.family == "gpt2":
@@ -98,91 +98,99 @@ def build_model(conf):
             n_head=conf.n_head,
         )
     elif conf.family == "lstm":
-        template_kwargs = dict(
+        hidden_dim = getattr(conf, "lstm_hidden_dim", conf.n_embd)
+        model = LSTMModel(
             n_dims=conf.n_dims,
             n_positions=conf.n_positions,
             n_embd=conf.n_embd,
+            hidden_dim=hidden_dim,
             num_layers=getattr(conf, "lstm_num_layers", 2),
             dropout=getattr(conf, "lstm_dropout", 0.0),
+            mlp_hidden_dim=getattr(conf, "lstm_mlp_hidden_dim", None),
             mlp_multiplier=getattr(conf, "lstm_mlp_multiplier", 4.0),
         )
-        match_params = getattr(conf, "lstm_match_transformer_params", True)
-        mlp_hidden_dim = getattr(conf, "lstm_mlp_hidden_dim", None)
-        if match_params:
-            hidden_dim, mlp_hidden_dim, target_params = _match_lstm_like_dimensions(
-                conf,
-                template_kwargs,
-                LSTMModel,
-                alignment=1,
-            )
-        else:
-            hidden_dim = _align_hidden_dim(
-                getattr(conf, "lstm_hidden_dim", conf.n_embd), 1
-            )
-            if mlp_hidden_dim is None:
-                multiplier = getattr(conf, "lstm_mlp_multiplier", 4.0)
-                mlp_hidden_dim = max(1, int(round(hidden_dim * multiplier)))
+        # match_params = getattr(conf, "lstm_match_transformer_params", True)
+        # mlp_hidden_dim = getattr(conf, "lstm_mlp_hidden_dim", None)
+        # if match_params:
+        #     hidden_dim, mlp_hidden_dim, target_params = _match_lstm_like_dimensions(
+        #         conf,
+        #         template_kwargs,
+        #         LSTMModel,
+        #         alignment=1,
+        #     )
+        # else:
+        #     hidden_dim = _align_hidden_dim(
+        #         getattr(conf, "lstm_hidden_dim", conf.n_embd), 1
+        #     )
+        #     if mlp_hidden_dim is None:
+        #         multiplier = getattr(conf, "lstm_mlp_multiplier", 4.0)
+        #         mlp_hidden_dim = max(1, int(round(hidden_dim * multiplier)))
 
-        model = LSTMModel(
-            hidden_dim=hidden_dim,
-            mlp_hidden_dim=mlp_hidden_dim,
-            **template_kwargs,
-        )
+        # model = LSTMModel(
+        #     hidden_dim=hidden_dim,
+        #     mlp_hidden_dim=mlp_hidden_dim,
+        #     **template_kwargs,
+        # )
 
-        if match_params:
-            lstm_params = _count_parameters(model)
-            if lstm_params != target_params:
-                raise ValueError(
-                    "LSTM model parameter count mismatch after matching routine."
-                )
+        # if match_params:
+        #     lstm_params = _count_parameters(model)
+        #     if lstm_params != target_params:
+        #         raise ValueError(
+        #             "LSTM model parameter count mismatch after matching routine."
+        #         )
     elif conf.family == "lstm_attention":
         attn_heads = getattr(conf, "attn_num_heads", 4)
         if attn_heads <= 0:
             raise ValueError("attn_num_heads must be positive for the LSTM attention model")
-        if conf.n_layer <= 0 or conf.n_head <= 0:
-            raise ValueError(
-                "n_layer and n_head must be positive to define the transformer parameter budget"
-            )
-        template_kwargs = dict(
+        # if conf.n_layer <= 0 or conf.n_head <= 0:
+        #     raise ValueError(
+        #         "n_layer and n_head must be positive to define the transformer parameter budget"
+        #     )
+        # template_kwargs = dict(
+        hidden_dim = getattr(conf, "lstm_hidden_dim", conf.n_embd)
+        if hidden_dim % attn_heads != 0:
+            raise ValueError("lstm_hidden_dim must be divisible by attn_num_heads")
+        model = LSTMAttentionModel(
             n_dims=conf.n_dims,
             n_positions=conf.n_positions,
             n_embd=conf.n_embd,
+            hidden_dim=hidden_dim,
             num_layers=getattr(conf, "lstm_num_layers", 2),
             dropout=getattr(conf, "lstm_dropout", 0.0),
             attn_heads=attn_heads,
             attn_dropout=getattr(conf, "attn_dropout", 0.0),
-            attn_mlp_multiplier=getattr(conf, "attn_mlp_multiplier", 4.0),
+            # attn_mlp_multiplier=getattr(conf, "attn_mlp_multiplier", 4.0),
         )
-        match_params = getattr(conf, "lstm_match_transformer_params", True)
-        mlp_hidden_dim = getattr(conf, "attn_mlp_hidden_dim", None)
+        # match_params = getattr(conf, "lstm_match_transformer_params", True)
+        # mlp_hidden_dim = getattr(conf, "attn_mlp_hidden_dim", None)
 
-        if match_params:
-            hidden_dim, mlp_hidden_dim, target_params = _match_lstm_like_dimensions(
-                conf,
-                template_kwargs,
-                LSTMAttentionModel,
-                alignment=attn_heads,
-            )
-        else:
-            hidden_dim = _align_hidden_dim(
-                getattr(conf, "lstm_hidden_dim", conf.n_embd), attn_heads
-            )
-            if mlp_hidden_dim is None:
-                multiplier = getattr(conf, "attn_mlp_multiplier", 4.0)
-                mlp_hidden_dim = max(1, int(round(hidden_dim * multiplier)))
+        # if match_params:
+        #     hidden_dim, mlp_hidden_dim, target_params = _match_lstm_like_dimensions(
+        #         conf,
+        #         template_kwargs,
+        #         LSTMAttentionModel,
+        #         alignment=attn_heads,
+        #     )
+        # else:
+        #     hidden_dim = _align_hidden_dim(
+        #         getattr(conf, "lstm_hidden_dim", conf.n_embd), attn_heads
+        #     )
+        #     if mlp_hidden_dim is None:
+        #         multiplier = getattr(conf, "attn_mlp_multiplier", 4.0)
+        #         mlp_hidden_dim = max(1, int(round(hidden_dim * multiplier)))
 
-        model = LSTMAttentionModel(
-            hidden_dim=hidden_dim,
-            mlp_hidden_dim=mlp_hidden_dim,
-            **template_kwargs,
-        )
+        # model = LSTMAttentionModel(
+        #     hidden_dim=hidden_dim,
+        #     mlp_hidden_dim=mlp_hidden_dim,
+        #     **template_kwargs,
+        # )
 
-        if match_params:
-            lstm_params = _count_parameters(model)
-            if lstm_params != target_params:
-                raise ValueError(
-                    "LSTM attention model parameter count mismatch after matching routine."
-                )
+        # if match_params:
+        #     lstm_params = _count_parameters(model)
+        #     if lstm_params != target_params:
+        #         raise ValueError(
+        #             "LSTM attention model parameter count mismatch after matching routine."
+        #         )
     else:
         raise NotImplementedError
 
