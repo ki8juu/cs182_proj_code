@@ -23,7 +23,9 @@ def _align_hidden_dim(hidden_dim, alignment):
     return hidden_dim + (alignment - remainder)
 
 
-def _match_lstm_like_dimensions(conf, template_kwargs, builder, *, alignment):
+def _match_lstm_like_dimensions(
+    conf, template_kwargs, builder, *, alignment, has_mlp=True
+):
     initial_hidden = _align_hidden_dim(
         getattr(conf, "lstm_hidden_dim", conf.n_embd), alignment
     )
@@ -59,10 +61,16 @@ def _match_lstm_like_dimensions(conf, template_kwargs, builder, *, alignment):
         candidates_checked += 1
         if candidates_checked > max_candidates:
             break
-        probe_kwargs = dict(template_kwargs, hidden_dim=hidden_dim, mlp_hidden_dim=1)
+        probe_kwargs = dict(template_kwargs, hidden_dim=hidden_dim)
+        if has_mlp:
+            probe_kwargs["mlp_hidden_dim"] = 1
         probe_model = builder(**probe_kwargs)
         base_count = _count_parameters(probe_model)
         if base_count > target_params:
+            continue
+        if not has_mlp:
+            if base_count == target_params:
+                return {"hidden_dim": hidden_dim}, target_params
             continue
         slope_kwargs = dict(probe_kwargs)
         slope_kwargs["mlp_hidden_dim"] = 2
@@ -74,7 +82,7 @@ def _match_lstm_like_dimensions(conf, template_kwargs, builder, *, alignment):
         if diff % slope != 0:
             continue
         mlp_hidden_dim = (diff // slope) + 1
-        return hidden_dim, mlp_hidden_dim, target_params
+        return {"hidden_dim": hidden_dim, "mlp_hidden_dim": mlp_hidden_dim}, target_params
 
     raise ValueError(
         "Unable to find LSTM dimensions that match the transformer's parameter count."
@@ -281,38 +289,6 @@ class TransformerModel(nn.Module):
         prediction = self._read_out(output)
         return prediction[:, ::2, 0][:, inds]  # predict only on xs
 
-class FinalAttentionBlock(nn.Module):
-    def __init__(self, hidden_dim, num_heads, dropout, mlp_hidden_dim):
-        super().__init__()
-        if hidden_dim % num_heads != 0:
-            raise ValueError("hidden_dim must be divisible by the number of attention heads")
-        if mlp_hidden_dim < 1:
-            raise ValueError("mlp_hidden_dim must be at least 1")
-        self.query_norm = nn.LayerNorm(hidden_dim)
-        self.context_norm = nn.LayerNorm(hidden_dim)
-        self.attn = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.attn_dropout = nn.Dropout(dropout)
-        self.mlp_norm = nn.LayerNorm(hidden_dim)
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_dim, mlp_hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(mlp_hidden_dim, hidden_dim),
-        )
-        self.mlp_dropout = nn.Dropout(dropout)
-
-    def forward(self, query, context):
-        context_norm = self.context_norm(context)
-        attn_out, _ = self.attn(self.query_norm(query), context_norm, context_norm)
-        query = query + self.attn_dropout(attn_out)
-        mlp_out = self.mlp(self.mlp_norm(query))
-        return query + self.mlp_dropout(mlp_out)
-
 class LSTMModel(nn.Module):
     def __init__(
         self,
@@ -392,8 +368,6 @@ class LSTMAttentionModel(nn.Module):
         dropout=0.0,
         attn_heads=4,
         attn_dropout=0.0,
-        mlp_hidden_dim=None,
-        attn_mlp_multiplier=4.0,
     ):
         super().__init__()
         self.name = (
@@ -409,16 +383,17 @@ class LSTMAttentionModel(nn.Module):
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0.0,
         )
-        if mlp_hidden_dim is None:
-            mlp_hidden_dim = max(1, int(round(hidden_dim * attn_mlp_multiplier)))
-        self.mlp_hidden_dim = mlp_hidden_dim
-        self.name += f"_mlp={mlp_hidden_dim}"
-        self._attn_block = FinalAttentionBlock(
-            hidden_dim=hidden_dim,
+        if hidden_dim % attn_heads != 0:
+            raise ValueError("hidden_dim must be divisible by attn_heads")
+        self._query_norm = nn.LayerNorm(hidden_dim)
+        self._context_norm = nn.LayerNorm(hidden_dim)
+        self._decoder_attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
             num_heads=attn_heads,
             dropout=attn_dropout,
-            mlp_hidden_dim=mlp_hidden_dim,
+            batch_first=True,
         )
+        self._decoder_dropout = nn.Dropout(attn_dropout)
         self._read_out = nn.Linear(hidden_dim, 1)
 
     @staticmethod
@@ -447,7 +422,11 @@ class LSTMAttentionModel(nn.Module):
         embeds = self._read_in(zs)
         encoded, _ = self._encoder(embeds)
         query = encoded[:, ::2, :]
-        attn_out = self._attn_block(query, encoded)
+        context = self._context_norm(encoded)
+        attn_out, _ = self._decoder_attn(
+            self._query_norm(query), context, context
+        )
+        attn_out = query + self._decoder_dropout(attn_out)
         prediction = self._read_out(attn_out)[..., 0]
         return prediction[:, inds]
 
