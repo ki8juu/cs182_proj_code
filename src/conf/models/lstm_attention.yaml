@@ -8,4 +8,4 @@ model:
     lstm_dropout: 0.1
     attn_num_heads: 4
     attn_dropout: 0.0
-    lstm_match_transformer_params: true
+  
