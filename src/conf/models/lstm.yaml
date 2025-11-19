@@ -7,4 +7,4 @@ model:
     lstm_num_layers: 2
     lstm_dropout: 0.1
     lstm_mlp_multiplier: 4.0
-    lstm_match_transformer_params: true
+   
