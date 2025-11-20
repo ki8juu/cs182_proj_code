@@ -431,8 +431,16 @@ class LSTMAttentionModel(nn.Module):
         encoded, _ = self._encoder(embeds)
         query = encoded[:, ::2, :]
         context = self._context_norm(encoded)
+
+        num_queries = query.size(1)
+        num_keys = context.size(1)
+
+        query_positions = torch.arange(num_queries, device=query.device).unsqueeze(1)
+        key_positions = torch.arange(num_keys, device=query.device).unsqueeze(0)
+        attn_mask = key_positions > (2 * query_positions)
+
         attn_out, _ = self._decoder_attn(
-            self._query_norm(query), context, context
+            self._query_norm(query), context, context, attn_mask=attn_mask
         )
         attn_out = query + self._decoder_dropout(attn_out)
         prediction = self._read_out(attn_out)[..., 0]
