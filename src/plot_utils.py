@@ -82,7 +82,7 @@ def collect_results(run_dir, df, valid_row=None, rename_eval=None, rename_model=
         for eval_name, results in sorted(metrics.items()):
             processed_results = {}
             for model_name, m in results.items():
-                if "gpt2" in model_name in model_name:
+                if "gpt2" in model_name or "lstm" in model_name:
                     model_name = r.model
                     if rename_model is not None:
                         model_name = rename_model(model_name, r)
