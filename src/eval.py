@@ -40,7 +40,8 @@ def get_model_from_run(run_path, step=-1, only_conf=False):
 
 def eval_batch(model, task_sampler, xs, xs_p=None):
     task = task_sampler()
-    if torch.cuda.is_available() and model.name.split("_")[0] in ["gpt2", "lstm"]:
+    model_family = model.name.split("_")[0]
+    if torch.cuda.is_available() and model_family in ["gpt2", "lstm"]:
         device = "cuda"
     else:
         device = "cpu"
@@ -327,6 +328,15 @@ def conf_to_model_name(conf):
             (6, 4): "Transformer-small",
             (12, 8): "Transformer",
         }[(conf.model.n_layer, conf.model.n_head)]
+    elif conf.model.family == "lstm":
+        num_layers = getattr(conf.model, "lstm_num_layers", 2)
+        hidden_dim = getattr(conf.model, "lstm_hidden_dim", conf.model.n_embd)
+        return f"LSTM-layers={num_layers}-hidden={hidden_dim}"
+    elif conf.model.family == "lstm_attention":
+        num_layers = getattr(conf.model, "lstm_num_layers", 2)
+        hidden_dim = getattr(conf.model, "lstm_hidden_dim", conf.model.n_embd)
+        attn_heads = getattr(conf.model, "attn_num_heads", 4)
+        return f"LSTM-Attention-layers={num_layers}-hidden={hidden_dim}-heads={attn_heads}"
     else:
         return conf.wandb.name
 
