@@ -19,13 +19,18 @@ import wandb
 torch.backends.cudnn.benchmark = True
 
 
-def train_step(model, xs, ys, optimizer, loss_func):
+def train_step(model, xs, ys, optimizer, loss_func, clip_grad_norm=None):
     optimizer.zero_grad()
     output = model(xs, ys)
     loss = loss_func(output, ys)
     loss.backward()
+
+    grad_norm = None
+    if clip_grad_norm is not None:
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+
     optimizer.step()
-    return loss.detach().item(), output.detach()
+    return loss.detach().item(), output.detach(), grad_norm
 
 
 def sample_seeds(total_seeds, count):
@@ -38,6 +43,8 @@ def sample_seeds(total_seeds, count):
 def train(model, args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.training.learning_rate)
     curriculum = Curriculum(args.training.curriculum)
+
+    clip_grad_norm = getattr(args.training, 'clip_grad_norm', 1.0)
 
     starting_step = 0
     state_path = os.path.join(args.out_dir, "state.pt")
@@ -86,7 +93,13 @@ def train(model, args):
 
         loss_func = task.get_training_metric()
 
-        loss, output = train_step(model, xs.cuda(), ys.cuda(), optimizer, loss_func)
+        loss, output, grad_norm = train_step(model, xs.cuda(), ys.cuda(), optimizer, loss_func, clip_grad_norm)
+
+        if torch.isnan(torch.tensor(loss)) or torch.isinf(torch.tensor(loss)):
+            print(f"Warning: NaN or Inf loss detected at step {i}. Loss: {loss}")
+            if grad_norm is not None:
+                print(f"Gradient norm: {grad_norm}")
+            continue
 
         point_wise_tags = list(range(curriculum.n_points))
         point_wise_loss_func = task.get_metric()
@@ -101,18 +114,18 @@ def train(model, args):
         )
 
         if i % args.wandb.log_every_steps == 0 and not args.test_run:
-            wandb.log(
-                {
-                    "overall_loss": loss,
-                    "excess_loss": loss / baseline_loss,
-                    "pointwise/loss": dict(
-                        zip(point_wise_tags, point_wise_loss.cpu().numpy())
-                    ),
-                    "n_points": curriculum.n_points,
-                    "n_dims": curriculum.n_dims_truncated,
-                },
-                step=i,
-            )
+            log_dict = {
+                "overall_loss": loss,
+                "excess_loss": loss / baseline_loss,
+                "pointwise/loss": dict(
+                    zip(point_wise_tags, point_wise_loss.cpu().numpy())
+                ),
+                "n_points": curriculum.n_points,
+                "n_dims": curriculum.n_dims_truncated,
+            }
+            if grad_norm is not None:
+                log_dict["grad_norm"] = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+            wandb.log(log_dict, step=i)
 
         curriculum.update()
 
