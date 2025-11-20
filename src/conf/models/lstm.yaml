@@ -1,10 +1,10 @@
 model:
     family: lstm
-    n_embd: 256
-    n_layer: 12
-    n_head: 8
-    lstm_hidden_dim: 512
-    lstm_num_layers: 2
+    n_embd: 64
+    n_layer: 3
+    n_head: 2
+    lstm_hidden_dim: 128
+    lstm_num_layers: 1
     lstm_dropout: 0.1
-    lstm_mlp_multiplier: 4.0
+    lstm_mlp_multiplier: 3.0
    
